@@ -78,11 +78,10 @@ typedef struct {
 
 
 Reading KnownValues[] = {
-		{2600, 2800, 2750, "Nothing"},
-		{1000, 2700, 2765, "Red"},
-		{800, 1750, 2450, "Yellow"},
-		{2100, 2100, 2300, "Green"},
-		{2100, 2300, 2100, "Blue"},
+		{3502, 3859, 3463, "Red"},
+		{3761, 3611, 3246, "Green"},
+		{3659, 3627, 3659, "Blue"},
+		{3839, 3938, 3703, "Yellow"},
 };
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -137,8 +136,8 @@ void CaptureReading(Reading* result) {
 }
 
 void SetServoAngle(unsigned long channel, uint32_t pulseMicros) {
-	// All three timers are configured to output a 50Hz (20,000 us) square wave,
-	// where the compare value is the high time in us.
+	// Tbe timer is configured to output a 50Hz (20,000 us) square wave,
+	// where the channel's compare value is the high time in us.
 	//
 	// Servos have nominal pulse-width to angle mapping, but they're not perfect.
 	// Better to check specific pulse lengths required to get the settings we need.
@@ -153,37 +152,34 @@ void SetServoAngle(unsigned long channel, uint32_t pulseMicros) {
 
 uint32_t ChutePulseMicros[] = {
 		900,
-		900,
-		900,
-		900,
-		900,
-		900,
-		900,
-		900,
-		900,
+		1050,
+		1200,
+		1450,
+		1600,
+		1750,
+		1850,
+		2000,
+		2100,
 };
 
+uint32_t DistributorSenseMicros = 900;
+uint32_t DistributorDropMicros = 2100;
+
+void SetDistributorPosition(int drop) {
+	SetServoAngle(TIM_CHANNEL_1, drop ? DistributorDropMicros : DistributorSenseMicros);
+}
+
 void SendChuteTo(int destinationChute) {
-	SetServoAngle(TIM_CHANNEL_1, ChutePulseMicros[destinationChute]);
+	SetServoAngle(TIM_CHANNEL_2, ChutePulseMicros[destinationChute]);
 }
 
 uint32_t ResetBarClosedMicros = 900;
-uint32_t ResetBarOpenMicros = 2100;
+uint32_t ResetBarOpenMicros = 1500;
 
 void SetResetBar(int open) {
-	SetServoAngle(TIM_CHANNEL_2, open ? ResetBarOpenMicros : ResetBarClosedMicros);
+	SetServoAngle(TIM_CHANNEL_3, open ? ResetBarOpenMicros : ResetBarClosedMicros);
 }
 
-uint32_t DistributorPulseMicros[] = {
-		900,
-		900,
-		900,
-		900,
-};
-
-void SetDistributorPosition(int position) {
-	SetServoAngle(TIM_CHANNEL_3, DistributorPulseMicros[position]);
-}
 
 unsigned char PrintBuffer[256];
 
@@ -207,6 +203,15 @@ void uartAcknowledgeOverflow() {
 	uartOverflow = 0;
 }
 
+unsigned char ImageData[16] = {0};
+unsigned char ColumnHeights[8] = {0};
+
+unsigned char GetPixelColor(unsigned char x, unsigned char y) {
+	unsigned char idx = y * 2 + x / 4;
+	unsigned char color = 0b11 & (ImageData[idx] >> (6-(x%4)*2));
+	while (color > 3);
+	return color;
+}
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
@@ -248,8 +253,6 @@ int main(void)
   MX_USART2_UART_Init();
   MX_ADC1_Init();
   MX_TIM3_Init();
-  MX_TIM1_Init();
-  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
   // Setup UART interrupt
@@ -263,20 +266,110 @@ int main(void)
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+
+
+  // Setup dropper to closed
+  SetResetBar(0);
+
   while (1)
   {
 
-	  /*
-	  value += 100;
-	  if (value >= 2100) value = 900;
-	  SetServoAngle(TIM_CHANNEL_1, value);
-	  SetServoAngle(TIM_CHANNEL_2, value);
-	  SetServoAngle(TIM_CHANNEL_3, value);
-	  */
+	  // Check for commands from PC
+	  if (uartAvailable()) {
 
-	  if (uartAvailable()) uartRead();
+		  char v = uartRead();
 
-	  HAL_UART_Transmit_IT(&huart2, rxBuffer, strlen(rxBuffer));
+		  if (v == 'i') { // Image data
+
+
+			  sprintf(PrintBuffer, "Receiving new image data\n");
+			  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
+
+			  for (int i = 0; i < 16; i++) {
+				  ImageData[i] = uartRead();
+			  }
+
+			  // Drop reset bar
+			  SetResetBar(1);
+			  HAL_Delay(1000);
+			  SetResetBar(0);
+			  HAL_Delay(1000);
+
+			  // Clear stacks
+			  for (int i = 0; i < 8; i++) ColumnHeights[i] = 0;
+
+		  }
+
+		  // Await terminator
+		  while (uartRead() != ';');
+
+	  }
+
+	  // Read current candy color
+	  Reading reading;
+	  CaptureReading(&reading);
+	  uint32_t closestDist = 0xffffffff;
+	  int closestReadingIdx = 0;
+	  for (int i = 0; i < sizeof(KnownValues) / sizeof(*KnownValues); i++) {
+		  uint32_t dist = CalculateDistance(KnownValues[i], reading);
+		  if (dist < closestDist) {
+			  closestDist = dist;
+			  closestReadingIdx = i;
+		  }
+	  }
+
+	  sprintf(PrintBuffer, "%d, %d, %d, \"%s\" (guess)\n", reading.red, reading.green, reading.blue, KnownValues[closestReadingIdx].data);
+	  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
+
+	  // Select appropriate destination and send chute there, marking slot in array
+	  int chute = 8; // Drop in last chute if no matches
+	  for (int x = 0; x < 8; x++) {
+		  int y = 7 - ColumnHeights[x];
+		  if (y < 0) continue;
+		  if (GetPixelColor(x, y) == closestReadingIdx) {
+			  chute = x;
+			  ColumnHeights[chute]++;
+			  break;
+		  }
+	  }
+	  sprintf(PrintBuffer, "Sending %s ball to chute %d\n", KnownValues[closestReadingIdx].data, chute);
+	  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
+
+	  SendChuteTo(chute);
+
+	  // Render out current model of the output.
+	  // Lower case is to-be-placed, upper is already-placed balls
+	  char *buf = PrintBuffer;
+	  for (int y = 0; y < 8; y++) {
+		  for (int x = 0; x < 8; x++) {
+			  int color = GetPixelColor(x, y);
+			  char symbol = KnownValues[color].data[0];
+			  if (y < (8-ColumnHeights[x])) {
+				  symbol += 'a' - 'A';
+			  }
+			  *buf = symbol;
+			  buf++;
+		  }
+		  *buf = '\n';
+		  buf++;
+	  }
+	  *buf = 0;
+	  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
+
+
+	  // Wait small amount
+	  HAL_Delay(1000);
+
+	  // Rotate distributor into dropping position
+	  SetDistributorPosition(1);
+
+	  // Wait small amount
+	  HAL_Delay(1000);
+
+	  // Rotate distributor into sensing position
+	  SetDistributorPosition(0);
+
+	  // Wait small amount
 	  HAL_Delay(1000);
 
     /* USER CODE END WHILE */
