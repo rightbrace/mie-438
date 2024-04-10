@@ -78,11 +78,13 @@ typedef struct {
 
 
 Reading KnownValues[] = {
-		{3502, 3859, 3463, "Red"},
-		{3761, 3611, 3246, "Green"},
-		{3659, 3627, 3659, "Blue"},
-		{3839, 3938, 3703, "Yellow"},
+		{2949, 3693, 2573, "Red"},
+//		{3073, 2848, 2533, "Green"},
+		{2905, 2649, 2616, "Blue"},
+		{3425, 3763, 2728, "Yellow"},
 };
+
+char paused = 1;
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) > (b) ? (a) : (b))
@@ -151,22 +153,23 @@ void SetServoAngle(unsigned long channel, uint32_t pulseMicros) {
 }
 
 uint32_t ChutePulseMicros[] = {
-		900,
-		1050,
-		1200,
-		1450,
-		1600,
-		1750,
+		530,
+		640,
+		805,
+		1035,
+		1240,
+		1440,
+		1650,
 		1850,
-		2000,
-		2100,
+		2050,
 };
 
-uint32_t DistributorSenseMicros = 900;
-uint32_t DistributorDropMicros = 2100;
 
-void SetDistributorPosition(int drop) {
-	SetServoAngle(TIM_CHANNEL_1, drop ? DistributorDropMicros : DistributorSenseMicros);
+uint32_t DistributorSenseMicros = 500;
+uint32_t DistributorDropMicros = 2600;
+
+void SetDistributorPosition(uint32_t position) {
+	SetServoAngle(TIM_CHANNEL_1, position);
 }
 
 void SendChuteTo(int destinationChute) {
@@ -262,7 +265,6 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  uint32_t value = 900;
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
@@ -271,8 +273,29 @@ int main(void)
   // Setup dropper to closed
   SetResetBar(0);
 
+  // Set distributor to grab a ball
+  SetDistributorPosition(DistributorDropMicros);
+  HAL_Delay(1000);
+  SetDistributorPosition(DistributorSenseMicros);
+  HAL_Delay(1000);
+
   while (1)
   {
+
+//	  while(1) {
+//		  for (int i = 0; i < 9; i++) {
+//
+//			  SendChuteTo(i);
+//			  sprintf(PrintBuffer, "Chute: %d, value: %d\n", i, ChutePulseMicros[i]);
+//			  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
+//		  }
+//	  }
+
+	  if (uartOverflow) {
+		  sprintf(PrintBuffer, "Inbound buffer overflow\n");
+		  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
+		  while (1);
+	  }
 
 	  // Check for commands from PC
 	  if (uartAvailable()) {
@@ -295,14 +318,34 @@ int main(void)
 			  SetResetBar(0);
 			  HAL_Delay(1000);
 
+			  // Clear distributor
+			  SetDistributorPosition(DistributorDropMicros);
+			  HAL_Delay(1000);
+			  SetDistributorPosition(DistributorSenseMicros);
+			  HAL_Delay(1000);
+
 			  // Clear stacks
 			  for (int i = 0; i < 8; i++) ColumnHeights[i] = 0;
 
+			  paused = 1;
+
+		  } if (v == 'p') { // pause
+			  paused = !paused;
+			  sprintf(PrintBuffer, paused ? "Stop\n" : "Start \n");
+			  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
 		  }
 
 		  // Await terminator
-		  while (uartRead() != ';');
+		  if (uartRead() != ';') {
+			  sprintf(PrintBuffer, "Message termination Error\n");
+			  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
+			  while (1);
+		  }
 
+	  }
+
+	  if (paused) {
+		  continue;
 	  }
 
 	  // Read current candy color
@@ -332,6 +375,7 @@ int main(void)
 			  break;
 		  }
 	  }
+
 	  sprintf(PrintBuffer, "Sending %s ball to chute %d\n", KnownValues[closestReadingIdx].data, chute);
 	  HAL_UART_Transmit(&huart2, PrintBuffer, strlen(PrintBuffer), 1000);
 
@@ -358,19 +402,19 @@ int main(void)
 
 
 	  // Wait small amount
-	  HAL_Delay(1000);
+	  HAL_Delay(350);
 
 	  // Rotate distributor into dropping position
-	  SetDistributorPosition(1);
+	  SetDistributorPosition(DistributorDropMicros);
 
 	  // Wait small amount
-	  HAL_Delay(1000);
+	  HAL_Delay(750);
 
 	  // Rotate distributor into sensing position
-	  SetDistributorPosition(0);
+	  SetDistributorPosition(DistributorSenseMicros);
 
 	  // Wait small amount
-	  HAL_Delay(1000);
+	  HAL_Delay(750);
 
     /* USER CODE END WHILE */
 
@@ -602,7 +646,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 8;
+  htim3.Init.Prescaler = 7;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 20000-1;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;

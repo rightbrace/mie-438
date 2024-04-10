@@ -24,7 +24,7 @@ text_color = 255, 255, 255
 
 color_table = [
     (202, 44, 56),
-    (57, 184, 67),
+    # (57, 184, 67),
     (83, 129, 182),
     (191, 188, 68)]
 
@@ -143,10 +143,13 @@ while True: # main game loop
                 msg.append(byte)
         msg.append(ord(';'))
         connection.write(bytes(msg))
+        print("<<Sending Image Data>>")
 
     if button(window_width-110, image_height * canvas_scale + 40, 
-            100, 25, "Ping"):
+            100, 25, "Start/Stop"):
         connection.write(b"p;")
+        print("<<START / STOP>>")
+
         
     pygame.display.update()
 
